@@ -16,9 +16,12 @@ module Mutineer
   # worker's database BEFORE any test loads; transactional fixtures then
   # repopulate that isolated database per test.
   #
-  # Scope: SQLite adapter only (per-worker file, hermetic). Postgres per-worker
-  # DBs (`CREATE DATABASE <db>-<worker>`) are not implemented yet; a non-SQLite
-  # config raises a clear NotImplementedError rather than silently mis-routing.
+  # Scope: SQLite only (per-worker file, hermetic). Any other adapter is left
+  # alone: its per-worker database comes from database.yml evaluated under the
+  # `TEST_ENV_NUMBER` that {DaemonClient} sets at spawn (the parallel_tests
+  # convention), and {boot_database} proves it connects. Creating those
+  # databases is the app's job, as it is with parallel_tests. A `-<worker>`
+  # rename cannot work there: a Postgres database must exist before it is used.
   #
   # Routing failures surface as `error` via {verify_connection!}. Tagging an
   # in-test DB failure as `error` (not `killed`) is only observable under
@@ -46,37 +49,51 @@ module Mutineer
       "#{database.delete_suffix(ext)}-#{worker}#{ext}"
     end
 
+    # True when this module owns per-worker routing: ActiveRecord is loaded and
+    # its adapter is SQLite. Every other adapter is routed by database.yml under
+    # `TEST_ENV_NUMBER`, so {after_fork} must leave its connection alone.
+    #
+    # @return [Boolean]
+    def self.routes?
+      available? && sqlite?(ActiveRecord::Base.connection_db_config.configuration_hash)
+    end
+
+    # Boot-time check for a non-SQLite app: connect once and return the database
+    # name the daemon resolved, so a wrong or missing per-worker database fails
+    # at boot instead of as a false verdict per mutant. SQLite is routed per
+    # fork and needs no boot check.
+    #
+    # The name comes from the live connection, not from database.yml: with
+    # `PGDATABASE` and no `database:` key the config has no name, and a worker
+    # that reports none would slip past the duplicate-database guard.
+    #
+    # @return [String, nil] the connected database name, or nil for SQLite or no AR.
+    def self.boot_database
+      return nil unless available?
+
+      config = ActiveRecord::Base.connection_db_config
+      return nil if sqlite?(config.configuration_hash)
+
+      verify_connection!
+      connection = ActiveRecord::Base.connection
+      connection.respond_to?(:current_database) ? connection.current_database : config.database
+    end
+
     # Build the AR connection config for one worker by copying the app's current
-    # (default test) config and swapping in the per-worker database path. SQLite
-    # only this pass: a non-SQLite adapter raises so the SQLite-first scope fails
-    # loud instead of mis-routing.
+    # (default test) config and swapping in the per-worker database path. Only
+    # called for SQLite (see {routes?}).
     #
     # @param worker [Integer] the worker slot index.
     # @return [Hash] a symbol-keyed AR configuration hash for the worker database.
-    # @raise [NotImplementedError] when the app's database is non-SQLite or in-memory.
+    # @raise [NotImplementedError] when the app's database is in-memory.
     def self.worker_db_config(worker)
-      hash    = ActiveRecord::Base.connection_db_config.configuration_hash
-      adapter = hash[:adapter].to_s
-      # Config shaping (per_worker_config) is already adapter-general: it derives
-      # correct SQLite and Postgres worker-DB names. What is gated is runtime
-      # provisioning: SQLite files are created on connect, but Postgres needs an
-      # explicit `CREATE DATABASE` per worker. Until that lands, refuse non-SQLite
-      # loudly rather than route to a database that does not exist.
-      unless adapter.start_with?("sqlite")
-        raise NotImplementedError,
-              "worker-DB isolation currently provisions SQLite only (got adapter #{adapter.inspect}); " \
-              "Postgres per-worker provisioning is not yet supported. Use a SQLite test DB, or drop --jobs."
-      end
-
-      per_worker_config(hash, worker)
+      per_worker_config(ActiveRecord::Base.connection_db_config.configuration_hash, worker)
     end
 
     # Pure config-shaping (no AR): given a connection config hash, return the
-    # per-worker variant with its database swapped to the worker's own name.
-    # Adapter-general: SQLite (`storage/test.sqlite3` -> `storage/test-<w>.sqlite3`)
-    # and Postgres (`myapp_test` -> `myapp_test-<w>`, Rails `parallelize` naming)
-    # both fall out of {worker_database_path}. Extracted and unit-tested so the
-    # Postgres shape is proven ready without a live database.
+    # per-worker variant with its database swapped to the worker's own name
+    # (`storage/test.sqlite3` -> `storage/test-<w>.sqlite3`) via
+    # {worker_database_path}. Extracted so the shaping is unit-tested without AR.
     #
     # @param config_hash [Hash] a connection config hash (symbol or string keys).
     # @param worker [Integer] the worker slot index.
@@ -104,7 +121,7 @@ module Mutineer
     # @param schema_path [String, nil] absolute path to `db/schema.rb`, or nil to skip.
     # @return [void]
     def self.after_fork(worker, schema_path = nil)
-      return unless available?
+      return unless routes?
 
       ActiveRecord::Base.establish_connection(worker_db_config(worker))
       load_schema(schema_path) if schema_path
@@ -134,5 +151,12 @@ module Mutineer
     def self.verify_connection!
       ActiveRecord::Base.connection.execute("SELECT 1")
     end
+
+    # @param config_hash [Hash] a connection config hash.
+    # @return [Boolean] whether its adapter is SQLite.
+    def self.sqlite?(config_hash)
+      config_hash[:adapter].to_s.start_with?("sqlite")
+    end
+    private_class_method :sqlite?
   end
 end

@@ -18,6 +18,11 @@ module Mutineer
   #
   # When jobs > 1 each worker runs against its OWN database, which is what makes
   # `--jobs N` safe under Rails (#26): parallel verdicts are identical to serial.
+  # SQLite gets a per-fork file from the daemon. Any other adapter follows the
+  # parallel_tests convention: every daemon is spawned with `TEST_ENV_NUMBER`
+  # ({worker_env}), the app's database.yml turns it into a per-worker database
+  # name, and {assert_distinct_databases!} stops the run when two workers still
+  # share one. Creating one database per worker is the app's job (`rake parallel:setup`).
   #
   # Job collection, `--since` filtering and coverage selection stay on {Runner} and
   # are called from here, so the daemon path can never drift from the in-process
@@ -100,7 +105,7 @@ module Mutineer
     # @return [Mutineer::CoverageMap, nil]
     def self.build_coverage_map(config, abs_tests)
       client = DaemonClient.new(boot: boot_config(config, abs_tests, coverage: true),
-                                app_root: config.project_root).start
+                                app_root: config.project_root, env: worker_env(0, 1)).start
       data = begin
         client.coverage
       ensure
@@ -148,7 +153,7 @@ module Mutineer
     # @return [Array<Mutineer::Result>] results in input order.
     def self.run_serial(jobs, config, abs_tests, coverage_map, source_map)
       client = DaemonClient.new(boot: boot_config(config, abs_tests),
-                                app_root: config.project_root).start
+                                app_root: config.project_root, env: worker_env(0, 1)).start
       results = []
       progress = Progress.new(jobs.size)
       begin
@@ -183,10 +188,12 @@ module Mutineer
       # can still quit the daemons already up. Array.new would lose every reference.
       clients = []
       begin
-        worker_count.times do
+        worker_count.times do |worker|
           clients << DaemonClient.new(boot: boot_config(config, abs_tests),
-                                      app_root: config.project_root).start
+                                      app_root: config.project_root,
+                                      env: worker_env(worker, worker_count)).start
         end
+        assert_distinct_databases!(clients)
       rescue StandardError
         clients.each(&:quit)
         raise
@@ -295,6 +302,46 @@ module Mutineer
       }
     end
 
+    # The parallel_tests environment for one worker: `TEST_ENV_NUMBER` is "" for
+    # worker 0, then "2", "3", ... (the gem's default numbering), and
+    # `PARALLEL_TEST_GROUPS` is the worker count. An app's database.yml reads them
+    # at boot, so the environment must be set at spawn. Every client gets it, the
+    # serial and coverage ones too, so all of them resolve the same worker-0 database.
+    #
+    # @api private
+    # @param worker [Integer] the worker slot index (0-based).
+    # @param count [Integer] how many workers the run uses.
+    # @return [Hash{String=>String}] environment variables for the daemon.
+    def self.worker_env(worker, count)
+      {
+        "TEST_ENV_NUMBER" => worker.zero? ? "" : (worker + 1).to_s,
+        "PARALLEL_TEST_GROUPS" => count.to_s
+      }
+    end
+
+    # Stop the run when two started daemons report the same database. Workers that
+    # share a database corrupt each other's transactional fixtures and produce wrong
+    # verdicts, so this is fatal, not a warning. SQLite reports no name (it is
+    # routed per fork) and is skipped.
+    #
+    # @api private
+    # @param clients [Array<Mutineer::DaemonClient>] started clients, one per worker.
+    # @raise [Mutineer::DaemonBootError] when two workers share a database.
+    # @return [void]
+    def self.assert_distinct_databases!(clients)
+      names = clients.map(&:database)
+      shared = names.compact.tally.find { |_, n| n > 1 }&.first
+      return unless shared
+
+      raise DaemonBootError,
+            "workers share the database #{shared.inspect}; parallel workers need one each. " \
+            "Add <%= ENV['TEST_ENV_NUMBER'] %> to `database:` in config/database.yml " \
+            "(for example `database: myapp_test<%= ENV['TEST_ENV_NUMBER'] %>`) and create one " \
+            "database per worker: `myapp_test`, `myapp_test2`, ... `--jobs` defaults to the " \
+            "number of CPUs. `rake parallel:setup` creates one per CPU; or pass `--jobs N` and " \
+            "create N, each with `RAILS_ENV=test TEST_ENV_NUMBER=2 bin/rails db:create db:schema:load`."
+    end
+
     # Absolute path to the app's `db/schema.rb` if it exists, else nil. Used by the
     # daemon to schema-load each fork's isolated worker database. Only `schema.rb`
     # is supported this pass; `structure.sql` apps get nil and fall back to
@@ -324,10 +371,10 @@ module Mutineer
       end
     end
 
-    # The module's contract is {execute} (the backend entry point) plus the two the
-    # tests drive directly: {boot_config} from the zero-dep suite and
-    # {build_coverage_map} from the daemon suite. Everything else is daemon-pipeline
-    # internals with no caller outside this file.
+    # The module's contract is {execute} (the backend entry point) plus the four the
+    # tests drive directly: {boot_config}, {worker_env} and {assert_distinct_databases!}
+    # from the zero-dep suite, and {build_coverage_map} from the daemon suite.
+    # Everything else is daemon-pipeline internals with no caller outside this file.
     private_class_method :run_serial, :run_parallel, :job_result, :schema_path, :result_for
   end
 end

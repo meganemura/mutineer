@@ -23,17 +23,21 @@ module Mutineer
   # Protocol (one JSON object per line, both directions):
   #   boot in  : {"cmd":"boot","project_root":"...","boot":"config/environment",
   #               "load_paths":["test"],"framework":"minitest","rails":true,"schema":"db/schema.rb"}
-  #   ready out: {"ready":true,"ruby":"3.3.6"}   (or {"ready":false,"error":"..."} then exit)
+  #   ready out: {"ready":true,"ruby":"3.3.6","database":"app_test2"}
+  #              (or {"ready":false,"error":"..."} then exit). "database" is the
+  #              connected database for a non-SQLite Rails app, else null.
   #   run  in  : {"id":N,"worker":I,"payload":{"code":"<ruby>","source_file":"app/models/order.rb"},
   #               "tests":["test/models/order_test.rb"],"timeout":30}
   #   verdict  : {"id":N,"verdict":"survived"|"killed"|"error"|"timeout"}
   #   quit in  : {"cmd":"quit"}
   #
-  # Worker isolation: when the app is Rails, each fork is routed to its own
-  # database `<db>-<worker>` via {RailsWorkerDb} BEFORE any test loads, so
+  # Worker isolation: when the app is Rails on SQLite, each fork is routed to its
+  # own database `<db>-<worker>` via {RailsWorkerDb} BEFORE any test loads, so
   # concurrent workers cannot clobber each other's transactional fixtures.
-  # `worker` defaults to 0 (serial). SQLite this pass; Postgres provisioning is
-  # not yet implemented.
+  # `worker` defaults to 0 (serial). Any other adapter is not routed here: each
+  # daemon process resolves its own database from database.yml under the
+  # `TEST_ENV_NUMBER` its client set, and boot fails fast if that database is
+  # unreachable.
   #
   # Verdict mapping: child exit 0=survived (suite passed), 1=killed (suite
   # failed), 2=error (child raised AROUND the test: load, boot, or worker-DB
@@ -59,7 +63,7 @@ module Mutineer
         return if boot_line.nil? # client vanished before boot
 
         boot!(JSON.parse(boot_line.strip))
-        output.puts(JSON.generate("ready" => true, "ruby" => RUBY_VERSION))
+        output.puts(JSON.generate("ready" => true, "ruby" => RUBY_VERSION, "database" => @database))
         output.flush
 
         input.each_line do |line|
@@ -123,19 +127,27 @@ module Mutineer
 
       # Load the per-worker DB adapter app-side (sibling gem file, by relative path
       # so it bypasses the app bundle, like this daemon itself). No-op unless the
-      # app has ActiveRecord. Records the adapter + schema path so each fork can
-      # route to its own database. SQLite-only this pass; a non-SQLite config
-      # raises in the fork and reads as `error`, never a mis-routed verdict.
+      # app has ActiveRecord. Records the schema path so each SQLite fork can
+      # route to its own database. For any other adapter it connects once and
+      # keeps the database name for the ready line; a failure there aborts boot
+      # (via boot!) instead of surfacing as a wrong verdict per mutant.
       def setup_worker_db(cfg)
-        require_relative "rails_worker_db"
+        begin
+          require_relative "rails_worker_db"
+        rescue LoadError => e
+          @errio.puts("[daemon] worker-DB routing unavailable: #{e.message}")
+          @worker_db = nil
+          return
+        end
         @worker_db = RailsWorkerDb.available? ? RailsWorkerDb : nil
+        # Outside the rescue above on purpose: a LoadError here is the app's
+        # driver gem (e.g. `pg`) missing, which must abort boot, not switch the
+        # boot check and the duplicate-database guard off.
+        @database = RailsWorkerDb.boot_database
         schema = cfg["schema"] && File.expand_path(cfg["schema"])
         @schema_path = schema if schema && File.exist?(schema)
         # Schema is loaded once per worker slot on first use (not every mutant fork).
         @schema_ready = {}
-      rescue LoadError => e
-        @errio.puts("[daemon] worker-DB routing unavailable: #{e.message}")
-        @worker_db = nil
       end
 
       # Build the coverage map app-side (Coverage was started at boot) and return

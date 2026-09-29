@@ -33,14 +33,25 @@ module Mutineer
     # @param ruby_version [String, nil] RBENV_VERSION for the app's Ruby (nil = inherit).
     # @param gemfile [String, nil] BUNDLE_GEMFILE for the app's bundle (nil = app_root/Gemfile).
     # @param errio [IO] where daemon stderr is drained.
-    def initialize(boot:, app_root:, ruby_version: nil, gemfile: nil, errio: $stderr)
+    # @param env [Hash{String=>String}] extra environment for the daemon, merged last
+    #   (it wins over the inherited environment). The backend uses it to hand each
+    #   worker its `TEST_ENV_NUMBER`.
+    def initialize(boot:, app_root:, ruby_version: nil, gemfile: nil, errio: $stderr, env: {})
       @boot = boot
       @app_root = app_root
       @ruby_version = ruby_version
       @gemfile = gemfile || File.join(app_root, "Gemfile")
       @errio = errio
+      @extra_env = env
       @restarts = 0
     end
+
+    # The database name the daemon reported in its ready handshake: the app's
+    # resolved database for a non-SQLite adapter, nil for SQLite or no ActiveRecord.
+    # Refreshed on every (re)spawn.
+    #
+    # @return [String, nil]
+    attr_reader :database
 
     # Spawn the daemon and complete the ready handshake. Raises DaemonBootError on
     # failure (surfaced by the CLI as a clean runtime error, not a hang).
@@ -124,7 +135,7 @@ module Mutineer
       env["BUNDLE_GEMFILE"] = @gemfile
       env["RBENV_VERSION"] = @ruby_version if @ruby_version
       env["RAILS_ENV"] ||= "test" if @boot[:rails] || @boot["rails"]
-      env
+      env.merge!(@extra_env)
     end
 
     # Spawn the daemon under the app bundle and complete the ready handshake.
@@ -169,6 +180,8 @@ module Mutineer
         close_io
         raise DaemonBootError, "daemon failed to boot under the app bundle: #{detail}"
       end
+
+      @database = ready["database"]
     end
 
     # Respawn after a crash, up to MAX_RESTARTS, then hard-fail loudly.

@@ -98,6 +98,7 @@ class DaemonBackendContractTest < Minitest::Test
     with_jobs do |jobs, config, source_map|
       client = Object.new
       def client.start = self
+      def client.database = nil
       def client.quit = nil
       def client.request(id:, **) = id.zero? ? "error" : "killed"
 
@@ -129,6 +130,7 @@ class DaemonBackendContractTest < Minitest::Test
     with_jobs do |jobs, config, source_map|
       client = Object.new
       def client.start = self
+      def client.database = nil
       def client.quit = nil
       def client.request(**) = raise(Mutineer::DaemonBootError, "daemon crashed 3 times; aborting the run")
 
@@ -150,6 +152,7 @@ class DaemonBackendContractTest < Minitest::Test
     with_jobs do |jobs, config, _source_map|
       client = Object.new
       def client.start = self
+      def client.database = nil
       def client.quit = nil
       def client.request(**) = "killed"
 
@@ -297,6 +300,7 @@ class DaemonBackendContractTest < Minitest::Test
       dying = Object.new
       dying.instance_variable_set(:@gate, gate)
       def dying.start = self
+      def dying.database = nil
       def dying.quit = nil
       def dying.request(**)
         @gate << :aborted
@@ -307,6 +311,7 @@ class DaemonBackendContractTest < Minitest::Test
       healthy.instance_variable_set(:@seen, [])
       healthy.instance_variable_set(:@gate, gate)
       def healthy.start = self
+      def healthy.database = nil
       def healthy.quit = nil
       def healthy.seen = @seen
       def healthy.request(id:, **)

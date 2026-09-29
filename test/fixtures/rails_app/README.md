@@ -43,7 +43,7 @@ schema itself.
 
 ```sh
 export PGHOST=localhost PGUSER=postgres PGPASSWORD=postgres
-export PGGSSENCMODE=disable   # macOS only; see the README
+export PGGSSENCMODE=disable   # macOS only; see the PostgreSQL section of the top-level README
 createdb mutineer_app_test && createdb mutineer_app_test2
 bin/dogfood-postgres
 ```

@@ -6,6 +6,17 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+### Added
+- **`--rails --daemon --jobs N` works on PostgreSQL.** Each daemon starts with
+  `TEST_ENV_NUMBER` (empty for worker 0, then `2`, `3`, ...) and
+  `PARALLEL_TEST_GROUPS`, the `parallel_tests` convention, so a `database.yml`
+  that ends the name with `TEST_ENV_NUMBER` gives every worker its own database.
+  Mutineer sets both for every `--daemon` run and overrides a value from the
+  shell. `--jobs` defaults to the number of CPUs, so create one database per
+  worker or pass `--jobs N`.
+  Boot checks the connection. The run stops when two workers share a database,
+  and the message shows the `database.yml` fix. SQLite routing is unchanged.
+
 ### Changed
 - **The docs site is built in CI** — a Pages workflow runs `rake site:build`
   and deploys the result, so the YARD HTML under `/api/`, `llms-full.txt`,

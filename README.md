@@ -129,14 +129,60 @@ RAILS_ENV=test bundle exec mutineer run \
 - **Coverage-guided** — each mutant runs only its covering tests (like `--rails`);
   a mutant on an uncovered line is `no_coverage`, so the score stays comparable to
   the in-process `--rails` score.
-- **Safe `--jobs N`** — each worker routes to its own copy of the test database, so
-  parallel verdicts equal serial (no fixture cross-talk).
+- **Safe `--jobs N`** — each worker uses its own test database, so parallel verdicts
+  equal serial (no fixture cross-talk). SQLite is routed for you; other databases
+  follow the `parallel_tests` convention (below).
 - **One backend at a time** — `--daemon` can't be combined with `--test-command`
   (choose one), and it needs an app to boot (`--rails` or `--boot`).
 
-Status: **SQLite** today (hermetic, CI-proven). **Postgres** per-worker
-provisioning is in progress (#34/#35); until it lands, use `--daemon` with a
-SQLite test database, or drop `--jobs` to run serially on other adapters.
+#### SQLite
+
+Nothing to set up. Each worker gets its own database file next to the test one
+(`storage/test-1.sqlite3`, and so on) and loads `db/schema.rb` into it.
+
+#### PostgreSQL and other databases
+
+Mutineer uses the `parallel_tests` convention. For every `--daemon` run it sets
+`TEST_ENV_NUMBER` and `PARALLEL_TEST_GROUPS` (the worker count) itself, and
+each worker's daemon gets its own `TEST_ENV_NUMBER`: empty for worker 0, then
+`2`, `3`, and so on. A value already set in your shell is overridden. This is
+the numbering that `parallel_tests` uses. Other tools that read the same
+variable may start from a different number. Put the number in the database
+name:
+
+```yaml
+# config/database.yml
+test:
+  adapter: postgresql
+  database: myapp_test<%= ENV["TEST_ENV_NUMBER"] %>
+```
+
+Create one database per worker: `myapp_test`, `myapp_test2`, ...
+`myapp_testN`. `--jobs` defaults to the number of CPUs, so either run
+`rake parallel:setup` (it creates one per CPU, the same default) or pass
+`--jobs N` and create N databases:
+
+```sh
+bundle exec rake parallel:setup      # or, per worker:
+RAILS_ENV=test TEST_ENV_NUMBER=2 bin/rails db:create db:schema:load
+```
+
+Mutineer does not create databases or load the schema for these adapters. If a
+daemon cannot connect, for example because worker 3 has no database, the run
+stops before the first mutant and names the missing database. If two workers
+resolve to the same database, it stops too, with the `database.yml` line to
+add. Plain `--rails` (no `--daemon`) does not set `TEST_ENV_NUMBER`, so it uses
+whatever your shell provides: normally unset, that is `myapp_test`.
+
+The number counts workers on one machine. If you also split a CI job across
+nodes and the nodes share one database server, add the node index to the
+database name yourself, for example with `CIRCLE_NODE_INDEX` or
+`CI_NODE_INDEX`.
+
+On macOS, a forked child that connects to PostgreSQL crashes once its parent has
+connected, because libpq initialises its GSS code once per process. Mutineer does
+not work around this. Export `PGGSSENCMODE=disable` before you run it, with or
+without `--daemon`.
 
 ### Apps on Ruby < 3.4
 

@@ -60,7 +60,7 @@ independent of Node and Playwright. CI runs these checks in `website browser tes
 
 ## CI gates that block merge
 
-`yard:strict` · `test` (×2 OS) · `test (minitest 6)` · `rails dogfood` + daemon integration · `website browser tests` · socket/gitguardian.
+`yard:strict` · `test` (×2 OS) · `test (minitest 6)` · `rails dogfood` + daemon integration · `rails dogfood (postgres)` · `website browser tests` · socket/gitguardian.
 
 ## PR review gate (before any merge — never skip)
 

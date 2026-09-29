@@ -1,3 +1,11 @@
+<% if ENV["MUTINEER_FIXTURE_DB"] == "postgres" %>
+# The parallel_tests convention: TEST_ENV_NUMBER is "" for worker 0, then 2, 3, ...
+# Each worker gets its own database, so `--daemon --jobs N` never shares one.
+# Connection settings come from the standard PG* environment variables.
+test:
+  adapter: postgresql
+  database: mutineer_app_test<%= ENV["TEST_ENV_NUMBER"] %>
+<% else %>
 # A file-backed SQLite DB (not :memory:) so the connection survives the fork
 # Mutineer does per mutant — exactly the fork-safety path --rails reconnects.
 test:
@@ -5,3 +13,4 @@ test:
   database: storage/test.sqlite3
   pool: 5
   timeout: 5000
+<% end %>

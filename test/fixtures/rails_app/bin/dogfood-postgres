@@ -1,0 +1,58 @@
+#!/usr/bin/env bash
+# Dogfood `--rails --daemon --jobs 2` against PostgreSQL, one database per worker
+# (parallel_tests numbering). Asserts that the strong suite scores 100% with no
+# errored mutant and exits 0, and that the weak suite leaves survivors with no
+# errored mutant and exits 1.
+#
+# Requires PostgreSQL reachable through the standard PG* variables, with the
+# databases mutineer_app_test and mutineer_app_test2 already created (the CI job
+# does this; locally: createdb mutineer_app_test && createdb mutineer_app_test2).
+set -euo pipefail
+
+cd "$(dirname "$0")/.."
+export RAILS_ENV=test
+export MUTINEER_FIXTURE_DB=postgres
+
+SRC=app/models/order.rb
+STRONG=test/models/order_test.rb
+WEAK=test/models/order_weak_test.rb
+OUT="$(mktemp)"
+trap 'rm -f "$OUT"' EXIT
+
+fail() {
+  echo "FAIL: $1"
+  cat "$OUT"
+  exit 1
+}
+
+# run_mutineer <wanted exit> <label> <mutineer args...>: run once into $OUT and
+# check the exit code.
+run_mutineer() {
+  local want=$1 label=$2; shift 2
+  local code=0
+  bundle exec mutineer run "$@" >"$OUT" 2>&1 || code=$?
+  [ "$code" -eq "$want" ] || fail "$label: expected exit $want, got $code"
+  echo "ok: $label (exit $code)"
+}
+
+# A boot or driver error makes mutants `error`, which can still exit 1 (weak) or
+# pass a threshold (strong), so the summary is checked as well.
+assert_no_errored() {
+  grep -Eq 'Errored:[[:space:]]+0([[:space:]]|$)' "$OUT" || fail "$1: the summary does not show Errored: 0"
+}
+
+echo "== strong suite kills every mutant on two Postgres workers (exit 0) =="
+run_mutineer 0 "strong --rails --daemon --jobs 2 --threshold 100" \
+  "$SRC" --test "$STRONG" --rails --daemon --jobs 2 --threshold 100
+assert_no_errored "strong"
+echo "ok: strong reports Errored: 0"
+
+echo "== weak suite leaves survivors, threshold gate fails (exit 1) =="
+run_mutineer 1 "weak --rails --daemon --jobs 2 --threshold 90" \
+  "$SRC" --test "$WEAK" --rails --daemon --jobs 2 --threshold 90
+assert_no_errored "weak"
+survived="$(sed -En 's/^Survived:[[:space:]]+([0-9]+).*/\1/p' "$OUT" | head -n 1)"
+[ -n "$survived" ] && [ "$survived" -gt 0 ] || fail "weak: the summary does not show Survived above 0"
+echo "ok: weak reports Errored: 0 and Survived: $survived"
+
+echo "All Rails Postgres checks passed."

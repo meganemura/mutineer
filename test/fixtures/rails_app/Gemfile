@@ -15,3 +15,8 @@ gem "sqlite3", "~> 1.7"
 # Mutineer under test, from this checkout (../../.. is the gem root). require:
 # false mirrors the documented install; the CLI is invoked via `bundle exec`.
 gem "mutineer", path: "../../..", require: false
+
+# PostgreSQL driver for the opt-in Postgres run (MUTINEER_FIXTURE_DB=postgres in
+# config/database.yml). Exact pin: the newest release older than a week with no
+# advisory against it.
+gem "pg", "1.6.3"

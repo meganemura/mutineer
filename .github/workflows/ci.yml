@@ -81,6 +81,43 @@ jobs:
       - name: Daemon integration tests (Phase 2a)
         run: bundle exec rake test:daemon
 
+  # `--daemon --jobs N` on PostgreSQL: each worker resolves its own database from
+  # database.yml under TEST_ENV_NUMBER (the parallel_tests convention). The job
+  # creates those databases the way `rake parallel:setup` would.
+  rails-postgres:
+    name: rails dogfood (postgres 18)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      PGHOST: localhost
+      PGUSER: postgres
+      PGPASSWORD: postgres
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: "3.4"
+          bundler-cache: true
+          working-directory: test/fixtures/rails_app
+      - name: Create one database per worker
+        run: |
+          psql -c 'CREATE DATABASE mutineer_app_test'
+          psql -c 'CREATE DATABASE mutineer_app_test2'
+      - name: Dogfood mutineer on two Postgres workers
+        working-directory: test/fixtures/rails_app
+        run: bin/dogfood-postgres
+
   site:
     name: website browser tests
     runs-on: ubuntu-latest

@@ -29,3 +29,21 @@ RAILS_ENV=test bundle exec mutineer run app/models/order.rb \
 decided solely by the test assertions. `order_test.rb` is a strong suite (kills
 everything); `order_weak_test.rb` covers the same lines but asserts almost
 nothing (the "coverage theater" Mutineer is built to expose).
+
+## Run it on PostgreSQL
+
+`config/database.yml` uses PostgreSQL when `MUTINEER_FIXTURE_DB=postgres` is set.
+The database name ends in `TEST_ENV_NUMBER`, the same convention the
+`parallel_tests` gem uses, so each `--daemon --jobs N` worker gets its own
+database. Worker 0 uses `mutineer_app_test`, the next worker `mutineer_app_test2`,
+and so on. `--jobs` defaults to the number of CPUs, so a run needs one database
+per worker: pass `--jobs N` and create N databases. `bin/dogfood-postgres` passes
+`--jobs 2`, so it needs the first two. Create them first; the suite loads the
+schema itself.
+
+```sh
+export PGHOST=localhost PGUSER=postgres PGPASSWORD=postgres
+export PGGSSENCMODE=disable   # macOS only; see the README
+createdb mutineer_app_test && createdb mutineer_app_test2
+bin/dogfood-postgres
+```

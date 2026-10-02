@@ -564,6 +564,28 @@ class CoverageMapTest < Minitest::Test
     end
   end
 
+  def test_record_has_nothing_to_carry_to_a_nil_line_before_the_first_counted_line
+    Dir.mktmpdir do |root|
+      path = File.join(root, "multi.rb")
+      File.write(path, "a\nb\n")
+      map = Mutineer::CoverageMap.new(source_paths: [path], test_paths: [], project_root: root, cache_dir: root)
+      map.send(:record, { path => [nil, 1] }, "t_test.rb")
+
+      assert_equal %w[multi.rb:2], map.map.keys
+    end
+  end
+
+  def test_record_leaves_the_data_after_end_marker_uncovered
+    Dir.mktmpdir do |root|
+      path = File.join(root, "data.rb")
+      File.write(path, "value = 1\n__END__\nsome data\n")
+      map = Mutineer::CoverageMap.new(source_paths: [path], test_paths: [], project_root: root, cache_dir: root)
+      map.send(:record, { path => [1, nil, nil] }, "t_test.rb")
+
+      assert_equal %w[data.rb:1], map.map.keys
+    end
+  end
+
   def test_source_outside_project_root_warns
     Dir.mktmpdir do |dir|
       sub = File.join(dir, "proj")

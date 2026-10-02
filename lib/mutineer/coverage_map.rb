@@ -722,15 +722,16 @@ module Mutineer
       end
     end
 
-    # Which lines of a source file hold code, not only a blank or a comment.
-    # Empty when the file cannot be read.
+    # Which lines of a source file hold code, not only a blank or a comment. The
+    # lines from `__END__` on are data, not code. Empty when the file cannot be
+    # read.
     #
     # @api private
     # @param path [String] absolute source path.
     # @return [Array<Boolean>] one entry per line.
     def code_lines(path)
       @code_lines ||= {}
-      @code_lines[path] ||= File.readlines(path).map do |line|
+      @code_lines[path] ||= File.readlines(path, chomp: true).take_while { |line| line != "__END__" }.map do |line|
         text = line.strip
         !text.empty? && !text.start_with?("#")
       end

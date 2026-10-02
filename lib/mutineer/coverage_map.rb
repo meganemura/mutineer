@@ -733,7 +733,8 @@ module Mutineer
       @code_lines ||= {}
       @code_lines[path] ||= File.readlines(path, chomp: true).take_while { |line| line != "__END__" }.map do |line|
         text = line.strip
-        !text.empty? && !text.start_with?("#")
+        comment = text.start_with?("#") && !text.start_with?('#{') # '#{' opens an interpolation
+        !text.empty? && !comment
       end
     rescue SystemCallError
       []

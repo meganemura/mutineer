@@ -575,6 +575,17 @@ class CoverageMapTest < Minitest::Test
     end
   end
 
+  def test_record_counts_a_line_that_opens_an_interpolation_as_code
+    Dir.mktmpdir do |root|
+      path = File.join(root, "heredoc.rb")
+      File.write(path, "text(<<~T)\n  \#{count > 0}\nT\n")
+      map = Mutineer::CoverageMap.new(source_paths: [path], test_paths: [], project_root: root, cache_dir: root)
+      map.send(:record, { path => [1, nil, nil] }, "t_test.rb")
+
+      assert_equal %w[heredoc.rb:1 heredoc.rb:2 heredoc.rb:3], map.map.keys
+    end
+  end
+
   def test_record_leaves_the_data_after_end_marker_uncovered
     Dir.mktmpdir do |root|
       path = File.join(root, "data.rb")

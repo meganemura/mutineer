@@ -27,8 +27,8 @@ module Mutineer
     # the parent. Stdout stays free for test output, which goes to File::NULL.
     RESULT_FD = 3
 
-    # Version of what the map records for a line. It is part of the digest, so a
-    # change to how lines are recorded rebuilds the cached maps.
+    # Version of what the map records. It is part of the digest, so changing it
+    # makes every cached map rebuild once.
     MAP_FORMAT = 2
 
     attr_reader :project_root, :failed_test_files, :failed_clean_tests, :phase_a_ran, :map
@@ -695,12 +695,10 @@ module Mutineer
       RUBY
     end
 
-    # Records every source line this test file ran. Ruby reports a count for the
-    # first line of a statement and nil, not 0, for its continuation lines (the
-    # second line of a hash literal or of a call's arguments). A nil line ran
-    # when the line before it ran, so it takes that line's result. Blank and
-    # comment lines are left out. Coverage.result keys are absolute; relativize
-    # and drop any path outside the project (stdlib/gem files).
+    # Records the source lines this test file ran. Ruby gives nil, not 0, for the
+    # continuation lines of a statement, so a nil line takes the result of the
+    # line before it. Coverage.result keys are absolute; relativize and drop any
+    # path outside the project (stdlib/gem files).
     def record(coverage, test_path)
       rel_test = relativize(test_path)
       coverage.each do |abs_file, data|
@@ -712,31 +710,25 @@ module Mutineer
         counts.each_with_index do |count, idx|
           ran = count.positive? unless count.nil?
           next unless ran
-          next if count.nil? && !code_line?(abs_file, idx)
+          next if count.nil? && !code_lines(abs_file)[idx]
 
           (@map["#{rel}:#{idx + 1}"] ||= []) << rel_test
         end
       end
     end
 
-    # Whether a line of a source file holds code, not only a blank or a comment.
-    #
-    # @api private
-    # @param abs_file [String] absolute source path.
-    # @param idx [Integer] zero-based line index.
-    # @return [Boolean]
-    def code_line?(abs_file, idx)
-      text = ((@source_lines ||= {})[abs_file] ||= read_lines(abs_file))[idx].to_s.strip
-      !text.empty? && !text.start_with?("#")
-    end
-
-    # The lines of a source file, or no lines when it cannot be read.
+    # Which lines of a source file hold code, not only a blank or a comment.
+    # Empty when the file cannot be read.
     #
     # @api private
     # @param path [String] absolute source path.
-    # @return [Array<String>]
-    def read_lines(path)
-      File.readlines(path)
+    # @return [Array<Boolean>] one entry per line.
+    def code_lines(path)
+      @code_lines ||= {}
+      @code_lines[path] ||= File.readlines(path).map do |line|
+        text = line.strip
+        !text.empty? && !text.start_with?("#")
+      end
     rescue SystemCallError
       []
     end

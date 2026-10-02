@@ -713,7 +713,8 @@ module Mutineer
             ran = count.positive?
             next unless ran
           else
-            next unless ran && code_lines(abs_file)[idx]
+            next unless ran # a continuation of a line that did not run
+            next unless code_lines(abs_file)[idx] # a blank or a comment
           end
 
           (@map["#{rel}:#{idx + 1}"] ||= []) << rel_test

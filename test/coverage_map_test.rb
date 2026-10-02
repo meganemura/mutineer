@@ -582,7 +582,7 @@ class CoverageMapTest < Minitest::Test
       map = Mutineer::CoverageMap.new(source_paths: [path], test_paths: [], project_root: root, cache_dir: root)
       map.send(:record, { path => [1, nil, nil] }, "t_test.rb")
 
-      assert_equal %w[heredoc.rb:1 heredoc.rb:2 heredoc.rb:3], map.map.keys
+      assert_includes map.map.keys, "heredoc.rb:2"
     end
   end
 

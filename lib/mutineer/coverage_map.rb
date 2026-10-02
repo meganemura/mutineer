@@ -711,10 +711,10 @@ module Mutineer
         counts.each_with_index do |count, idx|
           if count
             ran = count.positive?
+            next unless ran
           else
-            next unless code_lines(abs_file)[idx]
+            next unless ran && code_lines(abs_file)[idx]
           end
-          next unless ran
 
           (@map["#{rel}:#{idx + 1}"] ||= []) << rel_test
         end

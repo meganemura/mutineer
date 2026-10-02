@@ -8,11 +8,9 @@ All notable changes to this project are documented here. The format is based on
 
 ### Fixed
 - **A mutant on a later line of a multi-line expression runs its tests**
-  instead of being reported as `no_coverage`. Ruby reports no count for the
-  continuation lines of a statement (the second entry of a hash literal, the
-  second argument of a call on its own line), and mutineer read that as "no
-  test runs this line". Such a line now takes the result of the line before
-  it. Cached coverage maps are rebuilt once.
+  instead of being reported as `no_coverage`. Ruby counts only the first line
+  of a statement, and mutineer read the other lines as not run. Cached
+  coverage maps are rebuilt once.
 - **A bare `public`, `private` or `protected` ends `module_function` mode**,
   so later `def`s in the module body are named as instance methods, not
   singleton methods (#144).

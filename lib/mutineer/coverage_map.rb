@@ -27,7 +27,8 @@ module Mutineer
     # the parent. Stdout stays free for test output, which goes to File::NULL.
     RESULT_FD = 3
 
-    # Version of what the map records. It is part of the digest, so changing it
+    # Version of what the map records. Raise it when the same sources and tests
+    # would record a different map. It is part of the digest, so raising it
     # makes every cached map rebuild once.
     MAP_FORMAT = 2
 
@@ -706,11 +707,14 @@ module Mutineer
         next if rel.start_with?("/") # outside project_root: not our source
 
         counts = data.is_a?(Array) ? data : data["lines"]
-        ran = false
+        ran = false # whether the last line Ruby counted ran
         counts.each_with_index do |count, idx|
-          ran = count.positive? unless count.nil?
+          if count
+            ran = count.positive?
+          else
+            next unless code_lines(abs_file)[idx]
+          end
           next unless ran
-          next if count.nil? && !code_lines(abs_file)[idx]
 
           (@map["#{rel}:#{idx + 1}"] ||= []) << rel_test
         end

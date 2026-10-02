@@ -27,6 +27,10 @@ module Mutineer
     # the parent. Stdout stays free for test output, which goes to File::NULL.
     RESULT_FD = 3
 
+    # Version of what the map records for a line. It is part of the digest, so a
+    # change to how lines are recorded rebuilds the cached maps.
+    MAP_FORMAT = 2
+
     attr_reader :project_root, :failed_test_files, :failed_clean_tests, :phase_a_ran, :map
 
     # Build a QUERY-ONLY map from data captured elsewhere (the daemon builds the
@@ -691,9 +695,12 @@ module Mutineer
       RUBY
     end
 
-    # Records every source line with a non-zero execution count as covered by
-    # this test file. Coverage.result keys are absolute; relativize and drop any
-    # path outside the project (stdlib/gem files).
+    # Records every source line this test file ran. Ruby reports a count for the
+    # first line of a statement and nil, not 0, for its continuation lines (the
+    # second line of a hash literal or of a call's arguments). A nil line ran
+    # when the line before it ran, so it takes that line's result. Blank and
+    # comment lines are left out. Coverage.result keys are absolute; relativize
+    # and drop any path outside the project (stdlib/gem files).
     def record(coverage, test_path)
       rel_test = relativize(test_path)
       coverage.each do |abs_file, data|
@@ -701,12 +708,37 @@ module Mutineer
         next if rel.start_with?("/") # outside project_root: not our source
 
         counts = data.is_a?(Array) ? data : data["lines"]
+        ran = false
         counts.each_with_index do |count, idx|
-          next unless count&.positive?
+          ran = count.positive? unless count.nil?
+          next unless ran
+          next if count.nil? && !code_line?(abs_file, idx)
 
           (@map["#{rel}:#{idx + 1}"] ||= []) << rel_test
         end
       end
+    end
+
+    # Whether a line of a source file holds code, not only a blank or a comment.
+    #
+    # @api private
+    # @param abs_file [String] absolute source path.
+    # @param idx [Integer] zero-based line index.
+    # @return [Boolean]
+    def code_line?(abs_file, idx)
+      text = ((@source_lines ||= {})[abs_file] ||= read_lines(abs_file))[idx].to_s.strip
+      !text.empty? && !text.start_with?("#")
+    end
+
+    # The lines of a source file, or no lines when it cannot be read.
+    #
+    # @api private
+    # @param path [String] absolute source path.
+    # @return [Array<String>]
+    def read_lines(path)
+      File.readlines(path)
+    rescue SystemCallError
+      []
     end
 
     # Ruby source of the child-side `$LOADED_FEATURES` filter (project `.rb` files).
@@ -811,6 +843,7 @@ module Mutineer
       digest_group(d, "boot", [boot_digest_path]) if @boot_path
       @load_paths.sort.each { |lp| d.update("loadpath\0#{lp}\0") }
       d.update("framework\0#{@framework}\0")
+      d.update("format\0#{MAP_FORMAT}\0")
       d.hexdigest
     end
 

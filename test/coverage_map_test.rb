@@ -530,6 +530,40 @@ class CoverageMapTest < Minitest::Test
 
   # --- R7: source outside project root warns -------------------------------
 
+  def test_continuation_line_of_a_multi_line_hash_is_covered
+    source = File.expand_path("fixtures/continuation.rb", __dir__)
+    test = File.expand_path("fixtures/continuation_test.rb", __dir__)
+    map = Mutineer::CoverageMap.new(
+      source_paths: [source], test_paths: [test],
+      cache_dir: Dir.mktmpdir("mutineer-cache"), project_root: ROOT
+    ).build_or_load
+    line = File.readlines(source).index { |text| text.include?("no: counts") } + 1
+
+    refute_empty map.tests_for(source, line), "the second entry of the hash ran with the first"
+  end
+
+  def test_record_takes_the_result_of_the_line_before_for_a_nil_line
+    Dir.mktmpdir do |root|
+      path = File.join(root, "multi.rb")
+      File.write(path, "call(\n  a,\n\n  # note\n  b,\n)\n")
+      map = Mutineer::CoverageMap.new(source_paths: [path], test_paths: [], project_root: root, cache_dir: root)
+      map.send(:record, { path => [1, nil, nil, nil, nil, nil] }, "t_test.rb")
+
+      assert_equal %w[multi.rb:1 multi.rb:2 multi.rb:5 multi.rb:6], map.map.keys
+    end
+  end
+
+  def test_record_leaves_a_nil_line_after_a_line_that_did_not_run_uncovered
+    Dir.mktmpdir do |root|
+      path = File.join(root, "multi.rb")
+      File.write(path, "a\ncall(\n  b,\n)\n")
+      map = Mutineer::CoverageMap.new(source_paths: [path], test_paths: [], project_root: root, cache_dir: root)
+      map.send(:record, { path => [1, 0, nil, nil] }, "t_test.rb")
+
+      assert_equal %w[multi.rb:1], map.map.keys
+    end
+  end
+
   def test_source_outside_project_root_warns
     Dir.mktmpdir do |dir|
       sub = File.join(dir, "proj")

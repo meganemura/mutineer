@@ -4,6 +4,7 @@ require "tempfile"
 require_relative "result"
 require_relative "parser"
 require_relative "child_stdout"
+require_relative "child_error"
 require_relative "kill_channel"
 
 module Mutineer
@@ -29,7 +30,8 @@ module Mutineer
 
     # Runs the block in a forked child. The block's return value (an Integer
     # exit code) or any explicit `exit` is honoured; an unhandled exception
-    # becomes exit 2 with the cause written to STDERR.
+    # becomes exit 2 with the cause written to STDERR, and the cause also
+    # becomes the error Result's details (see {ChildError}).
     #
     # The child silences its stdout (see {ChildStdout.silence}) before the
     # block runs, so test output never reaches the user. Stderr stays open.
@@ -48,8 +50,10 @@ module Mutineer
     def self.run(timeout: DEFAULT_TIMEOUT, channel: false)
       rd, wr = IO.pipe if channel
       wr&.sync = true
+      cause_rd, cause_wr = IO.pipe
       pid = fork do
         rd&.close
+        cause_rd.close
         # Own process group so a timeout kill can reap grandchildren (match
         # daemon/external backends). Best-effort: if setpgid fails, kill the pid.
         Process.setpgid(0, 0) rescue nil # rubocop:disable Style/RescueModifier
@@ -62,9 +66,8 @@ module Mutineer
         rescue SystemExit => e
           code = e.status
         rescue Exception => e # rubocop:disable Lint/RescueException
-          # STDERR, not `warn`: a test may have left `$stderr` as a StringIO.
-          STDERR.puts "[mutineer-child] #{e.class}: #{e.message}"
           code = 2
+          report_cause(e, cause_wr)
         end
         STDERR.flush
         # exit! skips at_exit handlers — critical, since a child forked from
@@ -74,6 +77,7 @@ module Mutineer
       end
 
       wr&.close
+      cause_wr.close
       buffer = +"" if rd
       reading = !rd.nil?
 
@@ -83,7 +87,7 @@ module Mutineer
       deadline = Process.clock_gettime(Process::CLOCK_MONOTONIC) + timeout
       loop do
         reaped, status = Process.waitpid2(pid, Process::WNOHANG)
-        return finish(decode(status), rd, buffer, finished: true) if reaped
+        return finish(with_cause(decode(status), cause_rd), rd, buffer, finished: true) if reaped
 
         if Process.clock_gettime(Process::CLOCK_MONOTONIC) >= deadline
           begin
@@ -94,7 +98,9 @@ module Mutineer
           begin
             _reaped, status = Process.waitpid2(pid)
             # Child may have finished cleanly between WNOHANG and kill; honor it.
-            return finish(decode(status), rd, buffer, finished: true) if status && status.exited? && !status.signaled?
+            if status && status.exited? && !status.signaled?
+              return finish(with_cause(decode(status), cause_rd), rd, buffer, finished: true)
+            end
           rescue Errno::ECHILD
             # already reaped
           end
@@ -109,8 +115,39 @@ module Mutineer
       end
     ensure
       rd&.close
+      cause_rd&.close
       # Closed after the fork in the normal path; still open if fork raised.
       wr.close if wr && !wr.closed?
+      cause_wr.close if cause_wr && !cause_wr.closed?
+    end
+
+    # Sends the cause to the parent and prints its first line. Called in the
+    # child's last rescue, so it lets no exception out: one that left would end
+    # the child with status 1 (killed), or 0 for an exit (survived).
+    #
+    # @api private
+    # @param error [Exception] the exception that ended the block.
+    # @param cause_wr [IO] the write end of the cause pipe.
+    # @return [void]
+    def self.report_cause(error, cause_wr)
+      cause = ChildError.describe(error)
+      ChildError.write(cause_wr, cause)
+      # STDERR, not `warn`: a test may have left `$stderr` as a StringIO.
+      STDERR.puts "[mutineer-child] #{cause.lines.first.chomp}"
+    rescue Exception # rubocop:disable Lint/RescueException
+      nil
+    end
+
+    # `result` with the cause the child sent when it raised. Without one (an
+    # explicit exit 2, a signal) the status details stay.
+    #
+    # @api private
+    # @param result [Mutineer::Result] the result decoded from the exit status.
+    # @param cause_rd [IO] the read end of the child's cause pipe.
+    # @return [Mutineer::Result]
+    def self.with_cause(result, cause_rd)
+      cause = ChildError.read(cause_rd) if result.error?
+      cause ? result.with(details: cause) : result
     end
 
     # Reads what the channel holds now, without blocking.

@@ -17,6 +17,14 @@ All notable changes to this project are documented here. The format is based on
 
 ### Fixed
 
+- **An errored mutant says why.** When the process that runs a mutant raised,
+  the JSON `no_verdict[]` entry said only `child exited with status 2`. Its
+  `details` now hold the exception's class and message and up to 5 backtrace
+  lines, so a run that errors only sometimes can be traced afterwards. On the
+  `--daemon` path the details still say only `daemon verdict: error`.
+- **An exception whose `message` raises is scored `error`, not `killed`.** The
+  child read the message to report it, so that rescue raised too, and the child
+  ended with status 1, which reads as killed.
 - **A method in a `Data.define`, `Struct.new`, `Class.new` or `Module.new`
   block belongs to the class or module the block builds.** In
   `class App; Argo = Data.define(:url) do def self.load = ...; end; end` the

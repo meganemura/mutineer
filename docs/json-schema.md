@@ -6,7 +6,9 @@ agents. Output is deterministic: every array has a fixed sort order regardless o
 finish order, so two runs of the same inputs produce byte-identical output. `survivors[]` sorts by
 `(file, line, operator)`; `no_coverage[]`, `uncapturable[]`, `ignored[]` and `baseline.new_survivors`
 add `id`, as does `matrix.mutants`; `baseline.fixed_survivors` sorts by `(file, line, operator)`;
-`no_verdict[]` by `(file, line, id, status, details)`; `per_source[]` by `file`.
+`no_verdict[]` by `(file, line, id, status, details)`; `per_source[]` by `file`. The exception is the
+`details` of an errored mutant in `no_verdict[]`: it holds the cause as the failing process reported it,
+with paths of that machine.
 
 ## Versioning contract
 
@@ -95,8 +97,9 @@ The `id` is the value that `.mutineer.yml` `ignore:` takes. Before schema `1.6` 
 Every mutant that was attempted and produced no verdict: `{ subject, file, line, id, status, details }`.
 `status` is `"error"`, `"timeout"` or `"uncapturable"`, and its length equals `summary.no_verdict`.
 
-`details` carries the cause where there is one. For `"error"` that is the failure (a daemon crash, say);
-for `"timeout"` and `"uncapturable"` it is `null`, because the status is the whole story.
+`details` carries the cause where there is one. For `"error"` that is the failure (a daemon crash, say).
+When the mutant's process raised, it is the exception's class and message, then up to 5 backtrace lines,
+at most 4096 bytes. For `"timeout"` and `"uncapturable"` it is `null`, because the status is the whole story.
 
 A failure before the mutant could be forked has no subject or mutation, so `subject`, `file`, `line` and
 `id` are `null` on that entry. It still appears, because the counts must reconcile — but that means `id`

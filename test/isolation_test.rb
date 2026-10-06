@@ -28,6 +28,71 @@ class IsolationTest < Minitest::Test
     end
   end
 
+  # The exit status says only that the child raised, so the cause goes to the
+  # parent through a pipe and ends up in the JSON no_verdict[] details.
+  def test_unhandled_exception_puts_its_cause_in_the_details
+    result = nil
+    capture_subprocess_io { result = Mutineer::Isolation.run { raise ArgumentError, "boom" } }
+    assert_predicate result, :error?
+    assert_match(/\AArgumentError: boom\n/, result.details)
+    assert_includes result.details, "isolation_test.rb"
+  end
+
+  def test_exit_two_without_an_exception_keeps_the_status_details
+    assert_equal "child exited with status 2", Mutineer::Isolation.run { 2 }.details
+  end
+
+  # A cause longer than a pipe buffer would block the child's write.
+  def test_a_long_cause_is_cut_and_does_not_block_the_child
+    result = nil
+    capture_subprocess_io { result = Mutineer::Isolation.run(timeout: 5) { raise "x" * 200_000 } }
+    assert_predicate result, :error?
+    assert_operator result.details.bytesize, :<=, Mutineer::ChildError::LIMIT
+  end
+
+  # A cut inside a multibyte character must not grow the text past the limit.
+  def test_a_long_multibyte_cause_stays_within_the_limit
+    result = nil
+    capture_subprocess_io { result = Mutineer::Isolation.run { raise "a#{'é' * 3000}" } }
+    assert_operator result.details.bytesize, :<=, Mutineer::ChildError::LIMIT
+    assert_predicate result.details, :valid_encoding?
+  end
+
+  def test_a_binary_message_and_a_non_ascii_backtrace_keep_the_cause
+    Dir.mktmpdir do |dir|
+      file = File.join(dir, "ünï.rb")
+      File.write(file, "def mutineer_raise_binary = raise(\"\\xFF\".b)\n")
+      load file
+      result = nil
+      capture_subprocess_io { result = Mutineer::Isolation.run { mutineer_raise_binary } }
+      assert_match(/\ARuntimeError: /, result.details)
+      assert_includes result.details, "ünï.rb"
+    end
+  end
+
+  # A raising #message must not end the child with another status: that read
+  # as killed.
+  def test_an_exception_whose_message_raises_is_error
+    bad = Class.new(StandardError) { def message = raise("no message") }
+    result = nil
+    capture_subprocess_io { result = Mutineer::Isolation.run { raise bad } }
+    assert_predicate result, :error?
+  end
+
+  # Any exception while the cause is described must keep status 2, also one
+  # that is not a StandardError, or an exit that reads as survived.
+  def test_a_cause_that_cannot_be_described_is_still_error
+    raises_exception = Class.new(StandardError) { def message = raise(Exception, "no message") }
+    exits = Class.new(StandardError) { def message = exit(0) }
+    unnamed = Class.new(StandardError)
+    def unnamed.to_s = raise("no name")
+    [raises_exception, exits, unnamed].each do |error|
+      result = nil
+      capture_subprocess_io { result = Mutineer::Isolation.run { raise error } }
+      assert_predicate result, :error?, "#{error.ancestors.first(2)} gave #{result.status}"
+    end
+  end
+
   # --- stdout silencing at the fork boundary ------------------------------
   # The test runners do not silence output; Isolation.run does it once, right
   # after fork. These cases replace the runner-level silencing tests.
